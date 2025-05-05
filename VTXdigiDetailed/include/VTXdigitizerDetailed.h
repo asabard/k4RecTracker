@@ -188,6 +188,10 @@ private:
 
   void SetProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
 
+  bool isInsideSensitive(const dd4hep::DDSegmentation::CellID& cellID, 
+    int ix, int iy, float PixSizeX, float PixSizeY) const;
+
+
 private:
   // Additional Debug information
 

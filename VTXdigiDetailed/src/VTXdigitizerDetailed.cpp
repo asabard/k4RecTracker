@@ -424,16 +424,59 @@ void VTXdigitizerDetailed::get_charge_per_pixel(const edm4hep::SimTrackerHit& hi
     // Should add at this point a check that the pixel lies inside material - Not implemented for now
     for (int ix = IpxCloudMinX; ix <= IpxCloudMaxX; ix++) {
       for (int iy = IpxCloudMinY; iy <= IpxCloudMaxY; iy++) {
+  // Vérifier si le pixel est à l'intérieur du volume sensible avant de l'ajouter à la carte des hits
+       // Teste si le centre du pixel est à l'intérieur du volume sensible
+        if (!isInsideSensitive(cellID, ix, iy, PixSizeX, PixSizeY)) {
+        continue; // Ne pas ajouter de charge hors frontière réelle
+        }
 
-	float ChargeInPixel = Charge * x[ix] * y[iy];
-
-	hit_map[ix][iy] += ChargeInPixel; // load the charge inside the pixel in the pixels map
-	
+        float ChargeInPixel = Charge * x[ix] * y[iy];
+        // Ajouter la charge dans la carte des hits
+        hit_map[ix][iy] += ChargeInPixel;
+        } 
       } // end loop over y
     } // end loop over x
   } // End loop over charge collection
   //std::cout << hit_map.size() << ":" << (hit_map.begin()->second).size() << std::endl; // TEST
-} // End get_charge_per_pixel
+ // End get_charge_per_pixel
+
+
+// Verifier que le pixel est bien dans le volume sensible
+
+bool VTXdigitizerDetailed::isInsideSensitive(const dd4hep::DDSegmentation::CellID& cellID,
+  int ix, int iy,
+  float PixSizeX, float PixSizeY) const {
+
+// 1. Calculer la position locale du centre du pixel (dans le repère "modifié")
+float localX = ix * PixSizeX;
+float localY = iy * PixSizeY;
+
+// 2. Récupérer la transformation locale → globale
+TGeoHMatrix sensorTransformMatrix = m_volman.lookupDetElement(cellID).nominal().worldTransformation();
+SetProperDirectFrame(sensorTransformMatrix);  // Important pour rester cohérent avec DriftDirection
+
+// 3. Construire le point 3D local (dans le plan du capteur)
+double local3D[3] = { localX * dd4hep::mm, localY * dd4hep::mm, 0. };
+double global3D[3];
+sensorTransformMatrix.LocalToMaster(local3D, global3D);
+
+// 4. Obtenir la surface du capteur
+dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
+dd4hep::rec::SurfaceManager& surfMan = *theDetector.extension<dd4hep::rec::SurfaceManager>();
+dd4hep::DetElement det = m_geoSvc->getDetector()->detector(m_detectorName);
+const dd4hep::rec::SurfaceMap* surfMap = surfMan.map(det.name());
+
+if (!surfMap) return false;
+
+auto sIt = surfMap->find(cellID);
+if (sIt == surfMap->end()) return false;
+
+const dd4hep::rec::ISurface* surface = sIt->second;
+dd4hep::rec::Vector3D globalPos(global3D[0] / dd4hep::mm, global3D[1] / dd4hep::mm, global3D[2] / dd4hep::mm);
+return surface->insideBounds(globalPos);
+}
+
+/// Make_Digis()cd
 
 void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit hit,
 						  edm4hep::TrackerHitPlaneCollection* output_digi_hits,
