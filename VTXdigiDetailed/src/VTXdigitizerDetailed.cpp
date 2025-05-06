@@ -446,34 +446,49 @@ void VTXdigitizerDetailed::get_charge_per_pixel(const edm4hep::SimTrackerHit& hi
 bool VTXdigitizerDetailed::isInsideSensitive(const dd4hep::DDSegmentation::CellID& cellID,
   int ix, int iy,
   float PixSizeX, float PixSizeY) const {
-
-// 1. Calculer la position locale du centre du pixel (dans le repère "modifié")
+// 1. Calculer la position locale du centre du pixel
 float localX = ix * PixSizeX;
 float localY = iy * PixSizeY;
+debug() << "Local pixel center: localX = " << localX << ", localY = " << localY << endmsg;
 
-// 2. Récupérer la transformation locale → globale
+// 2. Transformation locale → globale
 TGeoHMatrix sensorTransformMatrix = m_volman.lookupDetElement(cellID).nominal().worldTransformation();
 SetProperDirectFrame(sensorTransformMatrix);  // Important pour rester cohérent avec DriftDirection
 
-// 3. Construire le point 3D local (dans le plan du capteur)
 double local3D[3] = { localX * dd4hep::mm, localY * dd4hep::mm, 0. };
 double global3D[3];
 sensorTransformMatrix.LocalToMaster(local3D, global3D);
+//debug() << "Global position: (" << global3D[0] << ", " << global3D[1] << ", " << global3D[2] << ")" << endmsg;
 
-// 4. Obtenir la surface du capteur
+// SurfaceManager
 dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
 dd4hep::rec::SurfaceManager& surfMan = *theDetector.extension<dd4hep::rec::SurfaceManager>();
 dd4hep::DetElement det = m_geoSvc->getDetector()->detector(m_detectorName);
 const dd4hep::rec::SurfaceMap* surfMap = surfMan.map(det.name());
 
-if (!surfMap) return false;
+if (!surfMap) {
+debug() << "Surface map not found for detector: " << det.name() << endmsg;
+return false;
+}
 
 auto sIt = surfMap->find(cellID);
-if (sIt == surfMap->end()) return false;
+if (sIt == surfMap->end()) {
+debug() << "Surface not found for cellID: " << cellID << endmsg;
+debug() << "Decoded cellID :" << m_decoder->valueString(cellID) << endmsg;
+return false;
+}
 
+// 4. Vérifier si la position globale est dans la surface
 const dd4hep::rec::ISurface* surface = sIt->second;
-dd4hep::rec::Vector3D globalPos(global3D[0] / dd4hep::mm, global3D[1] / dd4hep::mm, global3D[2] / dd4hep::mm);
-return surface->insideBounds(globalPos);
+dd4hep::rec::Vector3D globalPos(global3D[0] / dd4hep::mm,
+global3D[1] / dd4hep::mm,
+global3D[2] / dd4hep::mm);
+
+bool isInside = surface->insideBounds(globalPos);
+debug() << "globalPos = (" << globalPos.x() << ", " << globalPos.y() << ", " << globalPos.z()
+<< "), isInside = " << (isInside ? "true" : "false") << endmsg;
+
+return isInside;
 }
 
 /// Make_Digis()cd
