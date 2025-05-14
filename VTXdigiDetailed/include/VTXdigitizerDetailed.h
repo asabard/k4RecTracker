@@ -94,6 +94,15 @@ private:
   // Option to force hits onto sensitive surface
   BooleanProperty m_forceHitsOntoSurface{this, "forceHitsOntoSurface", false, "Project hits onto the surface in case they are not yet on the surface (default: false"};
 
+
+
+  // Decephiring CellID / Surface Not Found for CellID Issue
+  Gaudi::Property<size_t> m_cellIDBits{this, "CellIDBits", 64, "Number of bits to use for the cellID of the hits"}; 
+  // Mask to use for the cellID of the hits
+  std::uint64_t m_mask{static_cast<std::uint64_t>(-1)}; 
+  // Map to store the surface for each cellID
+  const dd4hep::rec::SurfaceMap* surfaceMap = nullptr;
+
   // Tangent of sensor's Lorentz angle (default is 0.1)
   FloatProperty m_tanLorentzAnglePerTesla{this, "tanLorentzAnglePerTesla", {0.1}, "Tangent of sensor's Lorentz angle per Tesla (default is 0.1)"};
 
@@ -188,7 +197,7 @@ private:
 
   void SetProperDirectFrame(TGeoHMatrix& sensorTransformMatrix) const;
 
-  bool isInsideSensitive(const dd4hep::DDSegmentation::CellID& cellID, 
+  bool isInsideSensitive(const dd4hep::DDSegmentation::CellID& originalCellID, 
     int ix, int iy, float PixSizeX, float PixSizeY) const;
 
 

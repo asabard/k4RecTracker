@@ -50,6 +50,12 @@ StatusCode VTXdigitizerDetailed::initialize() {
     }
   }
 
+  /// Try to handle bug 
+  
+  // Get detector 
+
+  const auto detector = m_geoSvc->getDetector();
+
   // check if readout exists
   if (m_geoSvc->getDetector()->readouts().find(m_readoutName) == m_geoSvc->getDetector()->readouts().end()) {
     error() << "Readout <<" << m_readoutName << ">> does not exist." << endmsg;
@@ -65,9 +71,32 @@ StatusCode VTXdigitizerDetailed::initialize() {
       << endmsg;
     return StatusCode::FAILURE;
   }
-  
+
   // retrieve the volume manager
+  // 5. Récupère le volume manager (SurfaceManager)
+  //dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
+
+
+  const auto surfMan = detector->extension<dd4hep::rec::SurfaceManager>();
+  dd4hep::DetElement det = detector->detector(m_detectorName);
+  surfaceMap = surfMan->map(m_detectorName);
+
+  if (!surfaceMap) {
+    error() << "Could not find surface map for detector: " << det.name() << endmsg;
+    return StatusCode::FAILURE;
+  }
+
+  info() << "Successfully loaded surface map for " << det.name() << endmsg;
+
+  // 7. Application d’un masque sur les cellID
+  if (m_cellIDBits != 64) {
+    m_mask = (static_cast<std::uint64_t>(1) << m_cellIDBits) - 1;
+    debug() << "Using cellID mask with " << m_cellIDBits
+           << " bits: 0x" << std::hex << m_mask << std::dec << endmsg;
+  }
+
   m_volman = m_geoSvc->getDetector()->volumeManager();
+
 
   // Get the sensor thickness per layer in mm
   dd4hep::DetType type(m_geoSvc->getDetector()->detector(m_detectorName).typeFlag()); // Get detector Type
@@ -88,8 +117,7 @@ StatusCode VTXdigitizerDetailed::initialize() {
   // initialise the cluster width
   m_ClusterWidth = 3.0;
   
-  return StatusCode::SUCCESS;
-}
+  return StatusCode::SUCCESS;}
 
 template<typename T> void VTXdigitizerDetailed::getSensorThickness() {
   /** Retrieve the sensor thickness per layer in millimeter
@@ -370,6 +398,7 @@ void VTXdigitizerDetailed::get_charge_per_pixel(const edm4hep::SimTrackerHit& hi
   
   // map to store the pixel integrals in the x and y directions
   std::map<int, float, std::less<int>> x, y;
+  int outsidePixelCount = 0;
   
   // Assign signal per readout channel and store sorted by channel number (in modified local frame)
   // Iterate over collection points on the collection plane
@@ -426,72 +455,79 @@ void VTXdigitizerDetailed::get_charge_per_pixel(const edm4hep::SimTrackerHit& hi
       for (int iy = IpxCloudMinY; iy <= IpxCloudMaxY; iy++) {
   // Vérifier si le pixel est à l'intérieur du volume sensible avant de l'ajouter à la carte des hits
        // Teste si le centre du pixel est à l'intérieur du volume sensible
+
+       
+
         if (!isInsideSensitive(cellID, ix, iy, PixSizeX, PixSizeY)) {
+        ++outsidePixelCount;
         continue; // Ne pas ajouter de charge hors frontière réelle
         }
-
+        
         float ChargeInPixel = Charge * x[ix] * y[iy];
         // Ajouter la charge dans la carte des hits
         hit_map[ix][iy] += ChargeInPixel;
         } 
       } // end loop over y
     } // end loop over x
+    debug() << "Cluster " << cellID << ": " 
+            << "added charge to " << hit_map.size() 
+            << " pixels, " << outsidePixelCount << " were outside sensitive area." << endmsg;
   } // End loop over charge collection
   //std::cout << hit_map.size() << ":" << (hit_map.begin()->second).size() << std::endl; // TEST
  // End get_charge_per_pixel
 
 
 // Verifier que le pixel est bien dans le volume sensible
+bool VTXdigitizerDetailed::isInsideSensitive(const dd4hep::DDSegmentation::CellID& originalCellID,
+                                             int ix, int iy,
+                                             float PixSizeX, float PixSizeY) const {
+  // Reconstruit le cellID du pixel
+  dd4hep::DDSegmentation::CellID pixelCellID = originalCellID;
+  m_decoder->set(pixelCellID, "x", ix);
+  m_decoder->set(pixelCellID, "y", iy);
 
-bool VTXdigitizerDetailed::isInsideSensitive(const dd4hep::DDSegmentation::CellID& cellID,
-  int ix, int iy,
-  float PixSizeX, float PixSizeY) const {
-// 1. Calculer la position locale du centre du pixel
-float localX = ix * PixSizeX;
-float localY = iy * PixSizeY;
-debug() << "Local pixel center: localX = " << localX << ", localY = " << localY << endmsg;
+  // Test : est-ce que ce pixel appartient à un capteur défini ?
+  try {
+    m_volman.lookupDetElement(pixelCellID);
+  } catch (...) {
+    return false;
+  }
 
-// 2. Transformation locale → globale
-TGeoHMatrix sensorTransformMatrix = m_volman.lookupDetElement(cellID).nominal().worldTransformation();
-SetProperDirectFrame(sensorTransformMatrix);  // Important pour rester cohérent avec DriftDirection
+  // Cherche la surface correspondante
+  auto cleanCellID = pixelCellID;
+  debug() << "Field description: " << m_decoder->fieldDescription() << endmsg;
+  debug() << "Searching for pixelCellID: " << pixelCellID << endmsg;
+  m_decoder->set(cleanCellID, "x", 0);
+  m_decoder->set(cleanCellID, "y", 0);
+  dd4hep::rec::SurfaceMap::const_iterator  it = surfaceMap->find(cleanCellID);
+  debug() << "Searching for cleanCellID: " << cleanCellID << " in surfaceMap." << endmsg;
+  debug() << "SurfaceMap size: " << surfaceMap->size() << endmsg; 
+  if (it == surfaceMap->end()) {
+  debug() << "Surface not found for cleaned cellID: " << cleanCellID << endmsg;
+  debug() << "Decoded cellID: " << m_decoder->valueString(cleanCellID) << endmsg;
+  return false;
+}
+  const dd4hep::rec::ISurface* surface = it->second;
 
-double local3D[3] = { localX * dd4hep::mm, localY * dd4hep::mm, 0. };
-double global3D[3];
-sensorTransformMatrix.LocalToMaster(local3D, global3D);
-//debug() << "Global position: (" << global3D[0] << ", " << global3D[1] << ", " << global3D[2] << ")" << endmsg;
+  // Calcule la position locale du centre du pixel
+  float localX = (ix + 0.5f) * PixSizeX;
+  float localY = (iy + 0.5f) * PixSizeY;
+  double local3D[3] = { localX * dd4hep::mm, localY * dd4hep::mm, 0. };
+  double global3D[3];
 
-// SurfaceManager
-dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
-dd4hep::rec::SurfaceManager& surfMan = *theDetector.extension<dd4hep::rec::SurfaceManager>();
-dd4hep::DetElement det = m_geoSvc->getDetector()->detector(m_detectorName);
-const dd4hep::rec::SurfaceMap* surfMap = surfMan.map(det.name());
+  // Transforme en coordonnées globales
+  TGeoHMatrix sensorTransformMatrix = m_volman.lookupDetElement(cleanCellID).nominal().worldTransformation();
+  SetProperDirectFrame(sensorTransformMatrix);
+  sensorTransformMatrix.LocalToMaster(local3D, global3D);
 
-if (!surfMap) {
-debug() << "Surface map not found for detector: " << det.name() << endmsg;
-return false;
+  dd4hep::rec::Vector3D globalPos(global3D[0] / dd4hep::mm,
+                                  global3D[1] / dd4hep::mm,
+                                  global3D[2] / dd4hep::mm);
+
+  // Vérifie que le point est dans la surface
+  return surface->insideBounds(globalPos);
 }
 
-auto sIt = surfMap->find(cellID);
-if (sIt == surfMap->end()) {
-debug() << "Surface not found for cellID: " << cellID << endmsg;
-debug() << "Decoded cellID :" << m_decoder->valueString(cellID) << endmsg;
-return false;
-}
-
-// 4. Vérifier si la position globale est dans la surface
-const dd4hep::rec::ISurface* surface = sIt->second;
-dd4hep::rec::Vector3D globalPos(global3D[0] / dd4hep::mm,
-global3D[1] / dd4hep::mm,
-global3D[2] / dd4hep::mm);
-
-bool isInside = surface->insideBounds(globalPos);
-debug() << "globalPos = (" << globalPos.x() << ", " << globalPos.y() << ", " << globalPos.z()
-<< "), isInside = " << (isInside ? "true" : "false") << endmsg;
-
-return isInside;
-}
-
-/// Make_Digis()cd
 
 void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit hit,
 						  edm4hep::TrackerHitPlaneCollection* output_digi_hits,
