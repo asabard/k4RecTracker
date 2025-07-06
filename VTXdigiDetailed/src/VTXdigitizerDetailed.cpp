@@ -542,29 +542,15 @@ void VTXdigitizerDetailed::get_charge_per_pixel(const edm4hep::SimTrackerHit& hi
   /** Get the map of recorded charges per pixel for a collection of drifted charges for a given hit
    */
 
-  // information detecteurs                                     
+  // Get the pixel dimensions in mm along x and y in the (modified) local frame with z orthogonal (see SetProperDirectFrame function)
+  float PixSizeX, PixSizeY;
   const dd4hep::DDSegmentation::CellID& cellID = hit.getCellID();
-  const auto& segmentation = m_geoSvc->getDetector()->readout(m_readoutName).segmentation();
-  const auto cellDims = segmentation.cellDimensions(cellID);
-
-  const float PixSizeX = cellDims[0] / dd4hep::mm;
-  const float PixSizeY = cellDims[1] / dd4hep::mm;
-
- // Récupérer la taille physique du capteur
-  float widthMin = 0.f, widthMax = 0.f;
-  float lengthMin = 0.f, lengthMax = 0.f;
-  GetSensorSize(hit, widthMin, widthMax, lengthMin, lengthMax);
-  debug() << "Sensor size: width [" << widthMin << ", " << widthMax << "] mm, length [" << lengthMin << ", " << lengthMax << "] mm" << endmsg;
-  // Conversion bornes physiques du capteur en indices pixels
-  const int MinPixXSensor = static_cast<int>(std::floor((widthMin + 0.5f * PixSizeX) / PixSizeX));
-  const int MaxPixXSensor = static_cast<int>(std::floor((widthMax + 0.5f * PixSizeX) / PixSizeX));
-  const int MinPixYSensor = static_cast<int>(std::floor((lengthMin + 0.5f * PixSizeY) / PixSizeY));
-  const int MaxPixYSensor = static_cast<int>(std::floor((lengthMax + 0.5f * PixSizeY) / PixSizeY));
-  debug() << "Sensor bounds in Pixel Indices : X [" << MinPixXSensor << ", " << MaxPixXSensor << "], Y [" << MinPixYSensor << ", " << MaxPixYSensor << "]" << endmsg;
-
+  PixSizeX = m_geoSvc->getDetector()->readout(m_readoutName).segmentation().cellDimensions(cellID)[0] / dd4hep::mm;
+  PixSizeY = m_geoSvc->getDetector()->readout(m_readoutName).segmentation().cellDimensions(cellID)[1] / dd4hep::mm;
+  
   // map to store the pixel integrals in the x and y directions
   std::map<int, float, std::less<int>> x, y;
-
+  
   // Assign signal per readout channel and store sorted by channel number (in modified local frame)
   // Iterate over collection points on the collection plane
   for (std::vector<SignalPoint>::const_iterator i = collectionPoints.begin(); i < collectionPoints.end(); i++) {
@@ -587,7 +573,7 @@ void VTXdigitizerDetailed::get_charge_per_pixel(const edm4hep::SimTrackerHit& hi
     int IpxCloudMinY = int(floor((CloudMinY + 0.5 * PixSizeY) / PixSizeY));
     int IpxCloudMaxY = int(floor((CloudMaxY + 0.5 * PixSizeY) / PixSizeY));
 
-    x.clear(); // clear temporary integration arrays
+    x.clear(); // clezar temporary integration arrays
     y.clear();
 
     // Integrate charge strips in x
@@ -613,29 +599,22 @@ void VTXdigitizerDetailed::get_charge_per_pixel(const edm4hep::SimTrackerHit& hi
       y[iy] = TotalStripCharge;
 
     } // End Integrate charge strips in y
-    
+
     // Get the 2D charge integrals by folding x and y strips
     // Should add at this point a check that the pixel lies inside material - Not implemented for now
     for (int ix = IpxCloudMinX; ix <= IpxCloudMaxX; ix++) {
       for (int iy = IpxCloudMinY; iy <= IpxCloudMaxY; iy++) {
 
-        // Check if the pixel is within the sensor bounds
-        if (ix < MinPixXSensor || ix > MaxPixXSensor || iy < MinPixYSensor || iy > MaxPixYSensor) {
-          continue; // Skip pixels outside the sensor bounds
-        }
+	float ChargeInPixel = Charge * x[ix] * y[iy];
 
-        // Calculate the charge in the pixel
-        // ChargeInPixel = Charge * x[ix] * y[iy]
-        // where x[ix] and y[iy] are the charge fractions in the x and y directions
-  	    float ChargeInPixel = Charge * x[ix] * y[iy];
-
-        hit_map[ix][iy] += ChargeInPixel; // Add the charge to the pixel map
-        }// end loop over y
-      } // end loop over x
-    } // End loop over charge collection
-      //std::cout << hit_map.size() << ":" << (hit_map.begin()->second).size() << std::endl; // TEST
+	hit_map[ix][iy] += ChargeInPixel; // load the charge inside the pixel in the pixels map
+	
+      } // end loop over y
+    } // end loop over x
+  } // End loop over charge collection
+  //std::cout << hit_map.size() << ":" << (hit_map.begin()->second).size() << std::endl; // TEST
 } // End get_charge_per_pixel
-     
+
 bool VTXdigitizerDetailed::Apply_Threshold(double& ChargeInE) const {
   /** Apply the threshold to the charge
    *  The threshold is defined in electrons
@@ -689,9 +668,6 @@ void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit hit,
     int value = m_decoder->get(cellID, name);
     debug() << "  " << name << " = " << value << endmsg;
   }
-  debug() << "Hit position in mm: (" << hit.getPosition().x * dd4hep::mm << ", "
-          << hit.getPosition().y * dd4hep::mm << ", "
-          << hit.getPosition().z * dd4hep::mm << ")" << endmsg;
   debug() << "is Secondary ? : " << hit.isProducedBySecondary() << endmsg;
   debug() << "is Overlay ? : " << hit.isOverlay() << endmsg;
 
@@ -859,21 +835,46 @@ void VTXdigitizerDetailed::generate_output(const edm4hep::SimTrackerHit hit,
   output_sim_digi_link.setFrom(output_digi_hit);
   output_sim_digi_link.setTo(hit);
 
+
+  double hitGlobalCentralPosition[3] = {hit.getPosition().x * dd4hep::mm,
+      hit.getPosition().y * dd4hep::mm,
+      hit.getPosition().z * dd4hep::mm};
+
+  double hitLocalCentralPosition[3] = {0, 0, 0};
+    // get the simHit coordinate in cm in the sensor reference frame
+  sensorTransformMatrix.MasterToLocal(hitGlobalCentralPosition, hitLocalCentralPosition);
+    
+  double DistX = DigiLocalX - hitLocalCentralPosition[0] / dd4hep::mm;
+  double DistY = DigiLocalY - hitLocalCentralPosition[1] / dd4hep::mm;
+
+
+  auto detElement = m_geoSvc->getDetector()->detector(m_detectorName);
+  dd4hep::DetType type(detElement.typeFlag());
+
+  if (type.is(dd4hep::DetType::ENDCAP)) {
+    if (DistX < -0.005 || DistX > 0.005) {
+    debug() << "[WARNING] DistX out of range! DistX: " << DistX 
+            << ", DistY: " << DistY 
+            << " | HitLocalX: " << hitLocalCentralPosition[0] * dd4hep::mm 
+            << ", HitLocalY: " << hitLocalCentralPosition[1] * dd4hep::mm << endmsg;
+    }
+  }
+  
   // Fill the debug histograms if needed
   if (m_DebugHistos) {
   
     // Get the global position of the hit (defined by default in Geant4 as the mean between the entry and exit point in the active material)
     // and apply unit transformation (translation matrix is stored in cm
-    double hitGlobalCentralPosition[3] = {hit.getPosition().x * dd4hep::mm,
-      hit.getPosition().y * dd4hep::mm,
-      hit.getPosition().z * dd4hep::mm};
+    //double hitGlobalCentralPosition[3] = {hit.getPosition().x * dd4hep::mm,
+    //hit.getPosition().y * dd4hep::mm,
+    //hit.getPosition().z * dd4hep::mm};
 
-    double hitLocalCentralPosition[3] = {0, 0, 0};
+    //double hitLocalCentralPosition[3] = {0, 0, 0};
     // get the simHit coordinate in cm in the sensor reference frame
-    sensorTransformMatrix.MasterToLocal(hitGlobalCentralPosition, hitLocalCentralPosition);
+    //sensorTransformMatrix.MasterToLocal(hitGlobalCentralPosition, hitLocalCentralPosition);
     
-    double DistX = DigiLocalX - hitLocalCentralPosition[0] / dd4hep::mm;
-    double DistY = DigiLocalY - hitLocalCentralPosition[1] / dd4hep::mm;
+    //double DistX = DigiLocalX - hitLocalCentralPosition[0] / dd4hep::mm;
+    //double DistY = DigiLocalY - hitLocalCentralPosition[1] / dd4hep::mm;
     double DistZ = 0. - hitLocalCentralPosition[2] / dd4hep::mm;
     hErrorX->Fill(DistX);
     hErrorY->Fill(DistY);
