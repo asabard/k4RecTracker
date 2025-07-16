@@ -79,7 +79,7 @@ StatusCode VTXdigitizerDetailed::initialize() {
 
     //Occupancy studies 
 
-    hDigisPerLayer  = new TH1D("hDigisPerLayer", "Digis per Layer", 10, 0, 10); // 100 bins max par exemple
+    hDigisPerLayer  = new TH1D("hDigisPerLayer", "Cluster per Layer", 10, 0, 10); // 100 bins max par exemple
     hDigisPerLayer->SetDirectory(0);
 
     hActivePixelPerlayer = new TH1D("hActivePixelPerlayer", "Active Pixels per Layer", 10, 0, 10);
